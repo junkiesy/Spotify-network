@@ -1,12 +1,12 @@
 # -----------------------------------------------------------
-# Record Label Collaboration Analysis (label-only)
+# Record Label Collaboration Analysis
 # -----------------------------------------------------------
 
 library(tidyverse)
 library(igraph)
 library(stringr)
 
-# 1) Load and clean data ------------------------------------
+
 
 path <- "C:/Users/matin/Downloads/"
 
@@ -29,20 +29,19 @@ df <- df %>%
         main_label = str_trim(str_extract(record_label, "^[^,]+"))
     )
 
-# 2) Build artist–artist edges from collaborators ------------
+
 
 edges <- df %>%
     filter(collaborators != "") %>%
     separate_rows(collaborators, sep = ",") %>%
     mutate(collaborators = str_trim(collaborators))
 
-# Keep edges where collaborator exists in our dataset
 edges_filtered <- edges %>%
     filter(collaborators %in% df$artist) %>%
     distinct(artist, collaborators) %>%
     rename(from = artist, to = collaborators)
 
-# 3) Attach labels to ends of each edge ----------------------
+
 
 edge_label <- edges_filtered %>%
     left_join(df %>% select(artist, main_label),
@@ -58,7 +57,7 @@ edge_label <- edges_filtered %>%
             label_from == label_to
     )
 
-# 4) Overall within-label vs cross-label summary -------------
+
 
 label_summary <- edge_label %>%
     summarise(
@@ -69,8 +68,6 @@ label_summary <- edge_label %>%
     )
 
 label_summary
-
-# 5) Bar plot: within-label vs cross-label -------------------
 
 label_summary_long <- label_summary %>%
     select(same_label_edges, cross_label_edges) %>%
@@ -94,12 +91,10 @@ ggplot(label_summary_long, aes(x = type, y = n)) +
     ) +
     theme_minimal()
 
-# 6) Build label–label edges (meta-network) ------------------
+
 
 label_edges <- edge_label %>%
     filter(!is.na(label_from), !is.na(label_to)) %>%
-    # Uncomment the next line if you want ONLY cross-label ties:
-    # filter(label_from != label_to) %>%
     count(label_from, label_to, name = "weight")
 
 g_labels <- graph_from_data_frame(label_edges,
@@ -108,9 +103,6 @@ g_labels <- graph_from_data_frame(label_edges,
 
 g_labels
 
-# 7) Label-level metrics -------------------------------------
-
-# Basic size
 num_labels <- vcount(g_labels)
 num_label_edges <- ecount(g_labels)
 
@@ -121,20 +113,20 @@ num_label_edges
 label_deg <- sort(degree(g_labels), decreasing = TRUE)
 label_deg[1:10]
 
-# Average degree
+
 mean_deg <- mean(degree(g_labels))
 mean_deg
 
-# Global clustering coefficient at label level
+
 label_clust <- transitivity(g_labels, type = "global")
 label_clust
 
-# Components (how many label clusters)
-label_comp <- components(g_labels)
-label_comp$no # number of components
-max(label_comp$csize) # size of largest component
 
-# 8) Plot full label–label network (dense, but complete) -----
+label_comp <- components(g_labels)
+label_comp$no
+max(label_comp$csize)
+
+
 
 set.seed(123)
 
@@ -155,9 +147,8 @@ plot(
     main = "Record Label Collaboration Network"
 )
 
-# 9) Cleaner graph: only high-degree labels ------------------
 
-deg_threshold <- 20 # change this if you want more/less labels
+deg_threshold <- 20
 
 g_labels_sub <- induced_subgraph(g_labels, V(g_labels)$deg >= deg_threshold)
 
@@ -175,9 +166,9 @@ plot(
     main = "Record Label Collaboration Network (Top Labels Only)"
 )
 
-# 10) Cleaner graph: only strong label ties ------------------
 
-weight_threshold <- 3 # keep label pairs with >= 3 artist collabs
+
+weight_threshold <- 3
 
 strong_label_edges <- label_edges %>%
     filter(weight >= weight_threshold)
@@ -199,8 +190,6 @@ plot(
     edge.color = adjustcolor("grey60", alpha.f = 0.7),
     main = "Record Label Collaboration Network (Edges ≥ 3 Collaborations)"
 )
-
-# 11) Top collaborating label pairs --------------------------
 
 top_label_pairs <- label_edges %>%
     arrange(desc(weight)) %>%
