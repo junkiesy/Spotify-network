@@ -5,24 +5,25 @@ library(readr)
 collab_edges <- read_csv("collaboration_details.csv")
 artist_data <- read_csv("detectCategory/combined_artist_details_extended_with_categories.csv")
 
-
+# Create edge list from collaborations
 edges <- data.frame(
   from = collab_edges$`Artist 1`,
   to = collab_edges$`Artist 2`,
   weight = collab_edges$`Number of Collaborations`,
   stringsAsFactors = FALSE
 )
-
+# Filter edges to only include artists in our liked songs
 artist_names <- artist_data$name
 edges <- edges[edges$from %in% artist_names & edges$to %in% artist_names, ]
 
-
+# Use all artists from artist_data as vertices (including those with zero edges)
+# Ensure 'name' column is first (igraph requirement)
 vertices_df <- artist_data[, c("name", setdiff(names(artist_data), "name"))]
 
-
+# Create graph
 collab_graph <- graph_from_data_frame(edges, directed = FALSE, vertices = vertices_df)
 
-
+# Basic network stats
 cat("Network Statistics:\n")
 cat("Nodes:", vcount(collab_graph), "\n")
 cat("Edges:", ecount(collab_graph), "\n")
@@ -34,7 +35,7 @@ cat("Density:", round(graph.density(collab_graph), 4), "\n\n")
 
 cat("=== Research Question 1: Most Central Artists ===\n\n")
 
-
+# Calculate centrality measures
 degree_centrality <- degree(collab_graph)
 betweenness_centrality <- betweenness(collab_graph)
 closeness_centrality <- closeness(collab_graph)
@@ -52,16 +53,48 @@ for (i in 1:length(top_between)) {
   cat(sprintf("%d. %s: %.2f\n", i, names(top_between)[i], top_between[i]))
 }
 
+# to get vertex coloring by degree
+degree_normalized <- (degree_centrality - min(degree_centrality)) / 
+                     (max(degree_centrality) - min(degree_centrality) + 1e-10) * 360
+vertex_colors <- hsv(h = degree_normalized / 360, s = 1, v = 1)
+
+set.seed(1234567)
 # Plot network with size by degree
 plot(collab_graph,
-  vertex.size = sqrt(degree_centrality) * 2,
-  vertex.label = ifelse(degree_centrality >= quantile(degree_centrality, 0.9), V(collab_graph)$name, NA),
-  vertex.label.cex = 0.5,
-  vertex.label.color = "black",
-  edge.width = E(collab_graph)$weight * 0.3,
-  layout = layout_with_fr(collab_graph),
-  main = "Collaboration Network - Node Size = Degree Centrality"
-)
+     vertex.size = 3,
+     vertex.label = NA, # ifelse(degree_centrality >= quantile(degree_centrality, 0.97), V(collab_graph)$name, NA),
+     vertex.label.cex = 0.5,
+     vertex.label.color = "black",
+     vertex.color = vertex_colors,
+     # edge.width = E(collab_graph)$weight * 0.3,
+     layout = layout_with_fr(collab_graph),
+     main = "Collaboration Network - Node Color = Degree Centrality")
+
+legend("topright",
+       legend = c("Low degree", "High degree"),
+       fill   = hsv(h = c(0, 1)),  # start/end of hue scale
+       border = NA,
+       title  = "Degree (HSV)",
+       cex    = 0.8)
+
+# Plot only the largest connected component with the same color values
+comp <- components(collab_graph)
+subg <- induced_subgraph(collab_graph, which(comp$membership == which.max(comp$csize)))
+
+# Use the same colors from the original graph (subset for vertices in subgraph)
+sub_colors <- vertex_colors[V(collab_graph)$name %in% V(subg)$name]
+
+set.seed(1234567)
+plot(subg,
+     vertex.size = 3,
+     vertex.color = sub_colors,
+     vertex.label = ifelse(degree_centrality[V(collab_graph)$name %in% V(subg)$name] >= 
+                             quantile(degree_centrality, 0.9), V(subg)$name, NA),
+     vertex.label.cex = 0.5,
+     vertex.label.color = "black",
+     # edge.width = E(subg)$weight * 0.3,
+     layout = layout_with_fr(subg),
+     main = "Largest Connected Component - Same Color Scale as Full Network")
 
 # ============================================================================
 # Research Question 2: How do genres/categories shape clustering?
@@ -69,29 +102,26 @@ plot(collab_graph,
 
 cat("\n=== Research Question 2: Genre/Category Clustering ===\n\n")
 
+# Parse categories
 parse_categories <- function(cat_string) {
-  if (is.na(cat_string) || cat_string == "") {
-    return(character(0))
-  }
+  if (is.na(cat_string) || cat_string == "") return(character(0))
   cats <- trimws(unlist(strsplit(cat_string, "[;,]")))
   cats <- cats[cats != ""]
   return(cats)
 }
 
+# Get primary category for each artist (first one)
 V(collab_graph)$primary_category <- sapply(V(collab_graph)$`detected category`, function(x) {
   cats <- parse_categories(x)
-  if (length(cats) > 0) {
-    return(cats[1])
-  } else {
-    return("Unknown")
-  }
+  if (length(cats) > 0) return(cats[1]) else return("Unknown")
 })
 
+set.seed(1234567)
 # Community detection
 communities <- cluster_louvain(collab_graph)
 V(collab_graph)$community <- communities$membership
 
-
+# Check category distribution within communities
 cat("Category distribution in top 5 communities:\n")
 top_communities <- sort(table(communities$membership), decreasing = TRUE)[1:5]
 for (comm_id in as.numeric(names(top_communities))) {
@@ -101,18 +131,26 @@ for (comm_id in as.numeric(names(top_communities))) {
   print(sort(comm_categories, decreasing = TRUE)[1:5])
 }
 
+# Plot with color by category
 category_colors <- rainbow(length(unique(V(collab_graph)$primary_category)))
 names(category_colors) <- unique(V(collab_graph)$primary_category)
 V(collab_graph)$color <- category_colors[V(collab_graph)$primary_category]
 
+set.seed(1234567)
 plot(collab_graph,
-  vertex.size = 3,
-  vertex.label = NA,
-  vertex.color = V(collab_graph)$color,
-  edge.width = 0.5,
-  layout = layout_with_fr(collab_graph),
-  main = "Collaboration Network - Colored by Primary Category"
-)
+     vertex.size = 3,
+     vertex.label = NA,
+     vertex.color = V(collab_graph)$color,
+     edge.width = 0.5,
+     layout = layout_with_fr(collab_graph),
+     main = "Collaboration Network - Colored by Primary Category")
+
+legend("topright",
+       legend = names(category_colors),
+       fill   = category_colors,
+       border = NA,
+       title  = "Primary Category",
+       cex    = 0.8)
 
 # ============================================================================
 # Research Question 3: Do certain genres act as collaboration hubs?
@@ -120,25 +158,24 @@ plot(collab_graph,
 
 cat("\n=== Research Question 3: Genre Collaboration Hubs ===\n\n")
 
-
-category_degrees <- aggregate(degree_centrality,
-  by = list(category = V(collab_graph)$primary_category),
-  FUN = mean
-)
+# Calculate average degree by category
+category_degrees <- aggregate(degree_centrality, 
+                              by = list(category = V(collab_graph)$primary_category), 
+                              FUN = mean)
 category_degrees <- category_degrees[order(category_degrees$x, decreasing = TRUE), ]
 
 cat("Average Collaborations per Artist by Category:\n")
 print(category_degrees)
 
-
+# Count artists per category
 category_counts <- table(V(collab_graph)$primary_category)
 cat("\nNumber of Artists per Category:\n")
 print(sort(category_counts, decreasing = TRUE))
 
+# Calculate total collaborations per category
 category_total_degree <- aggregate(degree_centrality,
-  by = list(category = V(collab_graph)$primary_category),
-  FUN = sum
-)
+                                   by = list(category = V(collab_graph)$primary_category),
+                                   FUN = sum)
 category_total_degree <- category_total_degree[order(category_total_degree$x, decreasing = TRUE), ]
 
 cat("\nTotal Collaborations per Category:\n")
@@ -150,16 +187,18 @@ print(category_total_degree)
 
 cat("\n=== Research Question 4: Popularity vs Connectivity ===\n\n")
 
+# Get popularity and followers
 V(collab_graph)$popularity <- as.numeric(V(collab_graph)$popularity)
 V(collab_graph)$followers <- as.numeric(V(collab_graph)$followers)
 
+# Correlation between popularity and degree
 cor_pop_degree <- cor(V(collab_graph)$popularity, degree_centrality, use = "complete.obs")
 cor_followers_degree <- cor(V(collab_graph)$followers, degree_centrality, use = "complete.obs")
 
 cat(sprintf("Correlation between Popularity and Degree: %.3f\n", cor_pop_degree))
 cat(sprintf("Correlation between Followers and Degree: %.3f\n", cor_followers_degree))
 
-
+# Top popular vs top connected
 top_popular <- V(collab_graph)$name[order(V(collab_graph)$popularity, decreasing = TRUE)[1:10]]
 top_connected <- names(sort(degree_centrality, decreasing = TRUE)[1:10])
 
@@ -169,11 +208,14 @@ cat("\nTop 10 by Collaborations:\n")
 print(top_connected)
 cat("\nOverlap:", length(intersect(top_popular, top_connected)), "artists\n")
 
+
+# Scatter plot
+set.seed(1234567)
+
 plot(V(collab_graph)$popularity, degree_centrality,
-  xlab = "Popularity", ylab = "Number of Collaborations",
-  main = "Popularity vs Collaboration Count",
-  pch = 19, cex = 0.5
-)
+     xlab = "Popularity", ylab = "Number of Collaborations",
+     main = "Popularity vs Collaboration Count",
+     pch = 19, cex = 0.5)
 abline(lm(degree_centrality ~ V(collab_graph)$popularity), col = "red")
 
 # ============================================================================
@@ -182,16 +224,14 @@ abline(lm(degree_centrality ~ V(collab_graph)$popularity), col = "red")
 
 cat("\n=== Research Question 5: Individual Taste Similarity ===\n\n")
 
-
+# Parse user column to get which users like each artist
 get_users <- function(user_string) {
-  if (is.na(user_string) || user_string == "") {
-    return(character(0))
-  }
+  if (is.na(user_string) || user_string == "") return(character(0))
   users <- trimws(unlist(strsplit(user_string, "[,;]")))
   return(users)
 }
 
-
+# Get artists per user
 user_artists <- list()
 for (i in 1:length(V(collab_graph))) {
   users <- get_users(V(collab_graph)$user[i])
@@ -204,6 +244,7 @@ for (i in 1:length(V(collab_graph))) {
   }
 }
 
+# Calculate Jaccard similarity between users (shared artists)
 users <- names(user_artists)
 similarity_matrix <- matrix(0, nrow = length(users), ncol = length(users))
 rownames(similarity_matrix) <- users
@@ -222,17 +263,18 @@ for (i in 1:length(users)) {
 cat("Shared Artist Similarity (Jaccard):\n")
 print(round(similarity_matrix, 3))
 
-
+# Shared collaborations
 cat("\nShared Collaborations:\n")
 for (i in 1:(length(users) - 1)) {
   for (j in (i + 1):length(users)) {
     user1_artists <- user_artists[[users[i]]]
     user2_artists <- user_artists[[users[j]]]
-
+    
+    # Find collaborations between users' artists
     shared_collabs <- 0
     for (k in 1:nrow(edges)) {
       if ((edges$from[k] %in% user1_artists && edges$to[k] %in% user2_artists) ||
-        (edges$to[k] %in% user1_artists && edges$from[k] %in% user2_artists)) {
+          (edges$to[k] %in% user1_artists && edges$from[k] %in% user2_artists)) {
         shared_collabs <- shared_collabs + 1
       }
     }
@@ -240,50 +282,50 @@ for (i in 1:(length(users) - 1)) {
   }
 }
 
-
+# Category overlap
 cat("\nCategory Overlap:\n")
 for (i in 1:(length(users) - 1)) {
   for (j in (i + 1):length(users)) {
     user1_artists <- user_artists[[users[i]]]
     user2_artists <- user_artists[[users[j]]]
-
+    
     user1_cats <- unique(unlist(sapply(user1_artists, function(a) {
       idx <- which(V(collab_graph)$name == a)
       if (length(idx) > 0) parse_categories(V(collab_graph)$`detected category`[idx]) else character(0)
     })))
-
+    
     user2_cats <- unique(unlist(sapply(user2_artists, function(a) {
       idx <- which(V(collab_graph)$name == a)
       if (length(idx) > 0) parse_categories(V(collab_graph)$`detected category`[idx]) else character(0)
     })))
-
+    
     shared_cats <- intersect(user1_cats, user2_cats)
-    cat(sprintf(
-      "%s - %s: %d shared categories (%s)\n",
-      users[i], users[j], length(shared_cats),
-      paste(shared_cats, collapse = ", ")
-    ))
+    cat(sprintf("%s - %s: %d shared categories (%s)\n", 
+                users[i], users[j], length(shared_cats), 
+                paste(shared_cats, collapse = ", ")))
   }
 }
 
+# Plot network colored by user
+user_colors <- c("I" = "red", "M" = "blue", "C" = "yellow", "M, I" = "purple", "M, C"="green", "I, C" = "orange", "M, I, C" ="black")
+uvals <- trimws(V(collab_graph)$user)  # trim just in case
+V(collab_graph)$user_color <- user_colors[uvals]
 
-user_colors <- c("I" = "red", "M" = "blue", "C" = "green")
-V(collab_graph)$user_color <- sapply(V(collab_graph)$user, function(u) {
-  users <- get_users(u)
-  if (length(users) == 1) {
-    return(user_colors[users[1]])
-  } else {
-    return("purple")
-  }
-})
-
+set.seed(1234567)
 plot(collab_graph,
-  vertex.size = 3,
-  vertex.label = NA,
-  vertex.color = V(collab_graph)$user_color,
-  edge.width = 0.5,
-  layout = layout_with_fr(collab_graph),
-  main = "Collaboration Network - Colored by User (I=red, M=blue, C=green, Multiple=purple)"
-)
+     vertex.size = 3,
+     vertex.label = NA,
+     vertex.color = V(collab_graph)$user_color,
+     edge.width = 0.5,
+     layout = layout_with_fr(collab_graph),
+     main = "Collaboration Network - Colored by User")
+
+legend("topright", 
+       legend = names(user_colors),
+       fill = user_colors,
+       title = "User(s)",
+       cex = 0.8)
+
 
 cat("\n=== Analysis Complete ===\n")
+
